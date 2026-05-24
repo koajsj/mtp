@@ -6,39 +6,17 @@
 - 需要 `root` 权限
 - 建议系统：Debian / Ubuntu
 
-## 使用方法
+## 一条命令部署
 
-### Linux VPS
-
-先从 GitHub 拉取仓库里的部署脚本。推荐 `curl`，没有 `curl` 时可用 `wget` 兜底：
+在 VPS 上直接执行这一条命令即可：
 
 ```bash
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL -o MTP一键部署.sh https://raw.githubusercontent.com/koajsj/mtp/main/MTP一键部署.sh
-elif command -v wget >/dev/null 2>&1; then
-  wget -O MTP一键部署.sh https://raw.githubusercontent.com/koajsj/mtp/main/MTP一键部署.sh
-else
-  echo "请先安装 curl 或 wget"
-  exit 1
-fi
+curl -fsSL https://raw.githubusercontent.com/koajsj/mtp/main/MTP一键部署.sh | bash
 ```
 
-然后执行：
+这个命令会自动：
 
-```bash
-bash MTP一键部署.sh
-```
-
-### Windows 本机
-
-如果你只是想先把脚本下载到本机查看或转存，可以用 PowerShell：
-
-```powershell
-Invoke-WebRequest -OutFile MTP一键部署.sh https://raw.githubusercontent.com/koajsj/mtp/main/MTP一键部署.sh
-```
-
-## 脚本会自动完成
-
+- 下载仓库里的部署脚本
 - 检查 `curl`
 - 按需安装 `curl`
 - 创建 `/home/mtproxy`
@@ -48,10 +26,10 @@ Invoke-WebRequest -OutFile MTP一键部署.sh https://raw.githubusercontent.com/
 ## 常用操作
 
 ```bash
-bash mtproxy.sh start
-bash mtproxy.sh debug
-bash mtproxy.sh stop
-bash mtproxy.sh restart
+bash /home/mtproxy/mtproxy.sh start
+bash /home/mtproxy/mtproxy.sh debug
+bash /home/mtproxy/mtproxy.sh stop
+bash /home/mtproxy/mtproxy.sh restart
 ```
 
 ## 卸载
