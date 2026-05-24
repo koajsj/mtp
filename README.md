@@ -8,19 +8,36 @@
 
 ## 使用方法
 
-1. 先在 VPS 上从 GitHub 拉取仓库里的部署脚本：
+### Linux VPS
+
+先从 GitHub 拉取仓库里的部署脚本。推荐 `curl`，没有 `curl` 时可用 `wget` 兜底：
 
 ```bash
-curl -fsSL -o MTP一键部署.sh https://raw.githubusercontent.com/koajsj/mtp/main/MTP一键部署.sh
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL -o MTP一键部署.sh https://raw.githubusercontent.com/koajsj/mtp/main/MTP一键部署.sh
+elif command -v wget >/dev/null 2>&1; then
+  wget -O MTP一键部署.sh https://raw.githubusercontent.com/koajsj/mtp/main/MTP一键部署.sh
+else
+  echo "请先安装 curl 或 wget"
+  exit 1
+fi
 ```
 
-2. 再在 VPS 上执行：
+然后执行：
 
 ```bash
 bash MTP一键部署.sh
 ```
 
-脚本会自动：
+### Windows 本机
+
+如果你只是想先把脚本下载到本机查看或转存，可以用 PowerShell：
+
+```powershell
+Invoke-WebRequest -OutFile MTP一键部署.sh https://raw.githubusercontent.com/koajsj/mtp/main/MTP一键部署.sh
+```
+
+## 脚本会自动完成
 
 - 检查 `curl`
 - 按需安装 `curl`
