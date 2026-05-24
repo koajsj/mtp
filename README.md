@@ -8,8 +8,13 @@
 
 ## 使用方法
 
-1. 把仓库里的 `MTP一键部署.sh` 上传到 VPS
-2. 在 VPS 上执行：
+1. 先在 VPS 上从 GitHub 拉取仓库里的部署脚本：
+
+```bash
+curl -fsSL -o MTP一键部署.sh https://raw.githubusercontent.com/koajsj/mtp/main/MTP一键部署.sh
+```
+
+2. 再在 VPS 上执行：
 
 ```bash
 bash MTP一键部署.sh
@@ -41,5 +46,5 @@ rm -rf /home/mtproxy
 ## 说明
 
 - 首次安装后，请按脚本提示完成配置
-- 如果 VPS 开了防火墙，请确认代理端口已放行
+- 如果 VPS 开了防火墙，请确认代理端口已经放行
 - 如果系统里没有 `curl`，脚本会尝试自动安装
