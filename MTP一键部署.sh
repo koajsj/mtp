@@ -3,6 +3,8 @@ set -euo pipefail
 
 MT_PROXY_DIR="/home/mtproxy"
 UPSTREAM_URL="https://raw.githubusercontent.com/ellermister/mtproxy/master/mtproxy.sh"
+: "${MT_PROXY_DEFAULT_PORT:=8443}"
+export MT_PROXY_DEFAULT_PORT
 
 log() {
   printf '[MTProxy] %s\n' "$*"
@@ -37,6 +39,12 @@ main() {
 
   log "downloading MTProxy installer"
   curl -fsSL -o mtproxy.sh "$UPSTREAM_URL"
+  if grep -q 'default_port=443' mtproxy.sh; then
+    sed -i 's/default_port=443/default_port="${MT_PROXY_DEFAULT_PORT:-8443}"/' mtproxy.sh
+  else
+    log "upstream installer layout changed; refusing to keep 443 as the default port"
+    exit 1
+  fi
   chmod +x mtproxy.sh
 
   log "starting upstream installer"

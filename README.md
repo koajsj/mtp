@@ -43,3 +43,7 @@ rm -rf /home/mtproxy
 - 首次安装后，请按脚本提示完成配置
 - 如果 VPS 开了防火墙，请确认代理端口已经放行
 - 如果系统里没有 `curl`，脚本会尝试自动安装
+## Default Port
+
+- The default client port is `8443`, not `443`.
+- Override it by setting `MT_PROXY_DEFAULT_PORT` before running the installer.
