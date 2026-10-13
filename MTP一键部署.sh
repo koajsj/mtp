@@ -2,7 +2,10 @@
 set -euo pipefail
 
 MT_PROXY_DIR="/home/mtproxy"
-UPSTREAM_URL="https://raw.githubusercontent.com/ellermister/mtproxy/master/mtproxy.sh"
+UPSTREAM_URLS=(
+  "https://raw.githubusercontent.com/ellermister/mtproxy/master/mtproxy.sh"
+  "https://ghproxy.com/https://raw.githubusercontent.com/ellermister/mtproxy/master/mtproxy.sh"
+)
 : "${MT_PROXY_DEFAULT_PORT:=8443}"
 export MT_PROXY_DEFAULT_PORT
 
@@ -31,14 +34,27 @@ ensure_curl() {
   fi
 }
 
+download_upstream_installer() {
+  local url
+  for url in "${UPSTREAM_URLS[@]}"; do
+    log "downloading MTProxy installer from ${url}"
+    if curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 1 -o mtproxy.sh "$url"; then
+      return 0
+    fi
+    log "failed to download from ${url}, trying next mirror"
+  done
+
+  log "all installer download URLs failed"
+  exit 1
+}
+
 main() {
   ensure_curl
 
   mkdir -p "$MT_PROXY_DIR"
   cd "$MT_PROXY_DIR"
 
-  log "downloading MTProxy installer"
-  curl -fsSL -o mtproxy.sh "$UPSTREAM_URL"
+  download_upstream_installer
   if grep -q 'default_port=443' mtproxy.sh; then
     sed -i 's/default_port=443/default_port="${MT_PROXY_DEFAULT_PORT:-8443}"/' mtproxy.sh
   else
