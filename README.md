@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/koajsj/mtp/main/MTP一键部署.sh 
 - 检查 `curl`
 - 按需安装 `curl`
 - 创建 `/home/mtproxy`
-- 下载上游安装脚本
+- 下载上游安装脚本（主地址失败会自动切换镜像）
 - 启动 MTProxy 安装流程
 
 ## 常用操作
