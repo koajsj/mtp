@@ -49,6 +49,8 @@ sudo bash ./MTP一键部署.sh install --port 9443 --stats-port 8889 \
 
 安装前使用 `ss` 检查客户端和统计端口；若 Docker 正在运行，还检查容器发布的宿主机 TCP 端口（包含端口范围，UDP 映射不会误报为 TCP 冲突）；不要求安装 Docker。若占用，显示监听信息、程序和 PID（能否看到完整进程名取决于权限），或显示占用的容器，然后退出。脚本不会关闭占用进程，不会接管 Nginx、Caddy、Apache 或面板。安装到 `/opt/mtp`、`/etc/mtp`、`/var/log/mtp`，创建 `mtp.service`、每天更新 Telegram 配置的 `mtp-refresh.timer` 及 `/etc/logrotate.d/mtp` 日志轮转配置。如这些路径、服务名或 `mtp` 用户/组已存在，安装会拒绝覆盖。
 
+systemd 配置或账号查询失败时也会拒绝继续，不能把查询失败当作资源不存在。账号查询仅将 GNU `getent` 的返回码 2 视为指定账号不存在；其他错误或成功但记录为空均报错。卸载末尾再次查询失败时会保留安装文件，此时服务可能已停止，请先修复查询故障再重试。
+
 ### 防火墙
 
 请在云厂商安全组与 VPS 现有防火墙中**自行**放行所选客户端 TCP 端口，例如 8443/tcp。安装器不会更改 UFW、firewalld、iptables、nftables 或云安全组，因此卸载也不会删除任何防火墙规则。不要开放统计端口 8888/tcp。仅 `systemctl active` 和本机监听不能证明互联网可达。
@@ -108,6 +110,7 @@ Secret 和带 Secret 的 Telegram 链接等同密码，不要公开分享，不�
 - **端口被占用**：先运行 `sudo ss -ltnp '( sport = :8443 )'` 查看进程；选择空闲端口，或由你自行调整已有服务。443 被 Web 服务占用时建议用 8443。
 - **安装失败**：检查命令缺失、构建依赖、GitHub/Telegram 网络、发行版和架构；如出现部分安装，检查 `/opt/mtp`、`/etc/mtp`、`/var/log/mtp` 和 systemd 状态后处理。
 - **服务异常退出**：执行 `sudo /opt/mtp/mtp status`，再看 `journalctl -u mtp.service -n 100 --no-pager` 和 `/var/log/mtp/mtp.log`。确认配置及端口没有被其他服务抢占。
+
 Telegram 无法连接时按顺序检查：
 
 1. **服务**：运行 `sudo /opt/mtp/mtp status` 和 `sudo /opt/mtp/mtp self-test`。
@@ -115,6 +118,7 @@ Telegram 无法连接时按顺序检查：
 3. **云安全组**：放行实际客户端 TCP 端口，不开放统计端口。
 4. **防火墙**：检查已有 UFW/nftables/iptables 规则，确认入站端口未被阻断。
 5. **Telegram 连通性**：核对链接里的公网地址、端口、Secret；确认 VPS 能访问 Telegram 的配置服务和代理上游，Fake TLS 域名可用。下载配置成功和 TCP 建连成功都不能替代 Telegram 客户端的实际连接验收。
+
 - **重启后不可用**：检查 `systemctl is-enabled mtp.service`、`systemctl status mtp.service`，再检查端口与日志。公网 IP 变化时更新 `/etc/mtp/mtp.conf` 中 `SERVER=`，执行 `sudo /opt/mtp/mtp link` 重新分享链接。
 
 ## 自动化检查

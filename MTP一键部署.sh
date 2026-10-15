@@ -152,17 +152,28 @@ runtime_permissions() {
   done
   [[ $(wc -c < "$CONFIG/proxy-secret") -ge 64 ]] && valid_telegram_config "$CONFIG/proxy-multi.conf" || die 'Telegram 数据文件不完整'
 }
+mtp_account_entry() {
+  local entry result
+  if entry=$(getent "$1" mtp); then
+    [[ -n $entry ]] || die "查询 mtp $1 返回空记录，拒绝操作"
+    printf '%s' "$entry"
+  else
+    result=$?
+    # GNU getent 的 2 表示指定账号不存在；其他错误不能视为不存在。
+    [[ $result == 2 ]] || die "无法查询 mtp $1（getent 返回 $result），拒绝操作"
+  fi
+}
 account_check() {
   local uid gid entry group_entry other
   [[ -f $CONFIG/account && ! -L $CONFIG/account && $(stat -c %u "$CONFIG/account") == 0 ]] || die '缺少安全的用户归属记录；旧安装请先人工核验用户，不能自动删除'
   [[ $(stat -c %a "$CONFIG/account") == 600 ]] || die '用户归属记录必须为 0600'
   read -r uid gid < "$CONFIG/account"
   [[ $uid =~ ^[0-9]+$ && $gid =~ ^[0-9]+$ && $uid != 0 && $gid != 0 ]] || die '用户归属记录无效'
-  entry=$(getent passwd mtp || :)
+  entry=$(mtp_account_entry passwd) || die '无法核验 mtp 用户'
   if [[ -n $entry ]]; then
     [[ $(printf '%s' "$entry" | cut -d: -f3-4) == "$uid:$gid" && $(printf '%s' "$entry" | cut -d: -f6-7) == /nonexistent:/usr/sbin/nologin ]] || die 'mtp 用户已更换或不属于本安装，拒绝删除'
   fi
-  group_entry=$(getent group mtp || :)
+  group_entry=$(mtp_account_entry group) || die '无法核验 mtp 组'
   if [[ -n $group_entry ]]; then
     [[ $(printf '%s' "$group_entry" | cut -d: -f3-4) == "$gid:" ]] || die 'mtp 组已更换或包含其他成员，拒绝删除'
   fi
@@ -252,12 +263,16 @@ install_proxy() (
   for path in "$APP" "$CONFIG" "$LOG" "$UNIT" "$TIMER" "$REFRESH" "$ROTATE"; do
     [[ ! -e $path && ! -L $path ]] || die "$path 已存在，拒绝覆盖"
   done
-  local unit_name fragment
+  local unit_name fragment load_state dropins entry group_entry
   for unit_name in mtp.service mtp-refresh.service mtp-refresh.timer; do
     fragment=$(systemctl show -p FragmentPath --value "$unit_name") || die "无法检查 $unit_name"
-    [[ -z $fragment && $(systemctl show -p LoadState --value "$unit_name") == not-found && -z $(systemctl show -p DropInPaths --value "$unit_name") ]] || die "systemd 中已存在 $unit_name ($fragment)，拒绝覆盖"
+    load_state=$(systemctl show -p LoadState --value "$unit_name") || die "无法检查 $unit_name 状态"
+    dropins=$(systemctl show -p DropInPaths --value "$unit_name") || die "无法检查 $unit_name 的额外配置"
+    [[ -z $fragment && $load_state == not-found && -z $dropins ]] || die "systemd 中已存在 $unit_name ($fragment)，拒绝覆盖"
   done
-  [[ -z $(getent passwd mtp || :) && -z $(getent group mtp || :) ]] || die 'mtp 用户或组已存在，拒绝复用'
+  entry=$(mtp_account_entry passwd) || die '无法核验 mtp 用户'
+  group_entry=$(mtp_account_entry group) || die '无法核验 mtp 组'
+  [[ -z $entry && -z $group_entry ]] || die 'mtp 用户或组已存在，拒绝复用'
   PORT=${MT_PROXY_DEFAULT_PORT:-8443}; STATS_PORT=8888; DOMAIN=www.cloudflare.com; SERVER=; TAG=
   while (($#)); do
     case "$1" in
@@ -560,8 +575,11 @@ uninstall_proxy() {
   systemctl stop mtp-refresh.service
   owner_check; account_check; no_unrelated_files
   # 先删除账号：失败时保留文件和归属记录，便于核验后重试。
-  if getent passwd mtp >/dev/null; then userdel mtp; fi
-  if getent group mtp >/dev/null; then groupdel mtp; fi
+  local entry group_entry
+  entry=$(mtp_account_entry passwd) || die '无法核验 mtp 用户，保留安装文件'
+  group_entry=$(mtp_account_entry group) || die '无法核验 mtp 组，保留安装文件'
+  if [[ -n $entry ]]; then userdel mtp; fi
+  if [[ -n $group_entry ]]; then groupdel mtp; fi
   rm -f -- "$UNIT" "$TIMER" "$REFRESH" "$ROTATE"
   rm -rf -- "$APP" "$CONFIG" "$LOG"
   [[ ! -e $UNIT && ! -e $TIMER && ! -e $REFRESH && ! -e $ROTATE && ! -e $APP && ! -e $CONFIG && ! -e $LOG ]] || die '文件清理不完整'

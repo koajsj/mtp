@@ -21,20 +21,15 @@ class SafetyTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertNotEqual(self.run_function(f'valid_port "{value}"').returncode, 0)
 
-    def test_conflict_never_kills(self):
-        result = self.run_function('ss() { echo \'LISTEN 0 128 *:443 *:* users:(("nginx",pid=123,fd=6))\'; }; require_free_port 443')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('nginx', result.stderr)
-        self.assertIn('123', result.stderr)
-        self.assertNotIn('kill -', SCRIPT.read_text())
-
     def test_docker_published_port_conflict(self):
-        result = self.run_function('''ss() { :; }; docker() {
-            if [[ $1 == info ]]; then return 0; fi
-            printf 'web 0.0.0.0:443->443/tcp\\n'
-        }; require_free_port 443''')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('web', result.stderr)
+        for address in ('0.0.0.0:443', '[::]:443'):
+            with self.subTest(address=address):
+                result = self.run_function(f'''ss() {{ :; }}; docker() {{
+                    if [[ $1 == info ]]; then return 0; fi
+                    echo 'web {address}->443/tcp';
+                }}; require_free_port 443''')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('web', result.stderr)
 
     def test_config_is_data(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -135,16 +130,6 @@ class SafetyTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertNotIn('UNEXPECTED_FETCH', result.stderr)
 
-    def test_install_fetch_failure_cleans_temp(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            result = self.install_fixture(tmp, '--server example.com',
-                extra=f'''ss() {{ :; }}; docker() {{ return 1; }};
-                mktemp() {{ mkdir "{tmp}/work"; echo "{tmp}/work"; }};
-                systemctl() {{ if [[ ${{3:-}} == LoadState ]]; then echo not-found; fi; }};
-                ''')
-            self.assertIn('UNEXPECTED_FETCH', result.stderr)
-            self.assertFalse((pathlib.Path(tmp) / 'work').exists())
-
     def test_refresh_restart_failure_restores_old_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / 'proxy-multi.conf'
@@ -188,24 +173,16 @@ class SafetyTests(unittest.TestCase):
             ss() { :; }; tail() { :; }; status_proxy''')
         self.assertNotEqual(result.returncode, 0)
 
-    def test_uninstall_account_failure_keeps_install(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            base = pathlib.Path(tmp)
-            (base / 'app').mkdir()
-            result = subprocess.run(['bash', '-c', '''source "$1"; APP=$2/app;
-                root_only() { :; }; lock() { :; }; owner_check() { :; };
-                account_check() { die '用户归属不同'; }; uninstall_proxy''',
-                'test', str(SCRIPT), str(base)], input='YES\n', capture_output=True, text=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertTrue((base / 'app').exists())
-
     def test_conflict_service_names(self):
         for name in ('nginx', 'caddy', 'BT-Panel', 'mtproto-proxy', 'apache2'):
             with self.subTest(name=name):
                 result = self.run_function(f'''ss() {{ echo 'LISTEN 0 128 *:443 *:* users:(("{name}",pid=123,fd=6))'; }};
+                    kill() {{ echo UNEXPECTED_SIGNAL >&2; return 1; }};
                     require_free_port 443''')
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(name, result.stderr)
+                self.assertIn('123', result.stderr)
+                self.assertNotIn('UNEXPECTED_SIGNAL', result.stderr)
 
     def test_wait_running_rejects_other_pid(self):
         result = self.run_function('''PORT=8443;
@@ -220,39 +197,6 @@ class SafetyTests(unittest.TestCase):
             ss() { echo 'LISTEN 0 128 *:443 *:* users:(("mtproto-proxy",pid=123,fd=6))'; };
             sleep() { :; }; wait_running''')
         self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_install_creates_usable_service_and_logrotate(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            extra = f'''ss() {{ :; }}; docker() {{ return 1; }};
-                groupadd() {{ :; }}; useradd() {{ :; }}; chown() {{ :; }};
-                stat() {{ python3 -c 'import os,sys; s=os.stat(sys.argv[-1]); print(str(s.st_dev)+":"+str(s.st_ino))' "$@"; }};
-                userdel() {{ :; }}; groupdel() {{ :; }};
-                id() {{ echo 991; }}; sha256sum() {{ cat >/dev/null; }};
-                fetch() {{ case "$1" in *getProxySecret) printf '%064d' 0 > "$2";;
-                    *getProxyConfig) echo 'proxy_for 2 149.154.167.51:8888;' > "$2";; *) echo archive > "$2";; esac; }};
-                tar() {{ if [[ $1 == -tzf ]]; then echo engine/Makefile;
-                    else touch "$4/Makefile"; fi; }};
-                make() {{ mkdir -p "$2/objs/bin"; touch "$2/objs/bin/mtproto-proxy";
-                    chmod 755 "$2/objs/bin/mtproto-proxy"; }};
-                install() {{ local mode=$2; shift 2; if [[ $1 == -g ]]; then shift 2; fi;
-                    cp "$1" "$2"; chmod "$mode" "$2"; }};
-                wait_running() {{ :; }};
-                sed() {{ if [[ $1 == -i ]]; then command sed "$2" "$3" > "$3.tmp"; mv "$3.tmp" "$3";
-                    else command sed "$@"; fi; }};
-                systemd-analyze() {{ :; }};
-                systemctl() {{ if [[ ${{3:-}} == LoadState ]]; then echo not-found; fi; }};
-            '''
-            result = self.install_fixture(tmp, '--server example.com --port 443', extra=extra)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            base = pathlib.Path(tmp)
-            self.assertTrue((base / 'unit').exists(), result.stdout + result.stderr)
-            unit = (base / 'unit').read_text()
-            self.assertIn('ReadWritePaths=/var/log/mtp', unit)
-            self.assertIn('StartLimitIntervalSec=0', unit)
-            self.assertIn('AmbientCapabilities=CAP_NET_BIND_SERVICE', unit)
-            self.assertIn('su root root', (base / 'rotate').read_text())
-            self.assertEqual((base / 'config' / 'account').read_text(), '991 991\n')
-            self.assertIn('port=443&secret=ee', result.stdout)
 
     def test_runtime_permissions_reject_root_only_config(self):
         result = self.run_function('''id() { echo 991; };

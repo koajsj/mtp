@@ -289,25 +289,30 @@ class DeepSafetyTests(unittest.TestCase):
             self.assertEqual((base / 'app' / '.owner').read_text(), 'mtp-owned-v1\n')
 
     def test_systemd_configuration_from_completed_install(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            result = self.run_function(install_mocks(tmp) + 'install_proxy --server example.com --port 9443')
-            self.assertEqual(result.returncode, 0, result.stderr)
-            service = configparser.ConfigParser(interpolation=None)
-            service.read(pathlib.Path(tmp) / 'unit')
-            self.assertEqual(service['Service']['User'], 'mtp')
-            self.assertEqual(service['Service']['Group'], 'mtp')
-            self.assertEqual(service['Service']['Restart'], 'always')
-            self.assertEqual(service['Service']['RestartSec'], '5s')
-            self.assertEqual(service['Service']['ProtectSystem'], 'strict')
-            self.assertEqual(service['Service']['ReadWritePaths'], '/var/log/mtp')
-            self.assertEqual(service['Service']['AmbientCapabilities'], '')
-            self.assertEqual(service['Unit']['StartLimitIntervalSec'], '0')
-            self.assertEqual(service['Install']['WantedBy'], 'multi-user.target')
-            timer = configparser.ConfigParser(interpolation=None)
-            timer.read(pathlib.Path(tmp) / 'timer')
-            self.assertEqual(timer['Timer']['Persistent'], 'true')
-            self.assertEqual(timer['Timer']['Unit'], 'mtp-refresh.service')
-            self.assertTrue((pathlib.Path(tmp) / 'config' / 'manifest').is_file())
+        for port, capabilities in ((443, 'CAP_NET_BIND_SERVICE'), (9443, '')):
+            with self.subTest(port=port), tempfile.TemporaryDirectory() as tmp:
+                result = self.run_function(install_mocks(tmp) + f'install_proxy --server example.com --port {port}')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                service = configparser.ConfigParser(interpolation=None)
+                service.read(pathlib.Path(tmp) / 'unit')
+                self.assertEqual(service['Service']['User'], 'mtp')
+                self.assertEqual(service['Service']['Group'], 'mtp')
+                self.assertEqual(service['Service']['Restart'], 'always')
+                self.assertEqual(service['Service']['RestartSec'], '5s')
+                self.assertEqual(service['Service']['ProtectSystem'], 'strict')
+                self.assertEqual(service['Service']['ReadWritePaths'], '/var/log/mtp')
+                self.assertEqual(service['Service']['AmbientCapabilities'], capabilities)
+                self.assertEqual(service['Service']['CapabilityBoundingSet'], capabilities)
+                self.assertEqual(service['Unit']['StartLimitIntervalSec'], '0')
+                self.assertEqual(service['Install']['WantedBy'], 'multi-user.target')
+                timer = configparser.ConfigParser(interpolation=None)
+                timer.read(pathlib.Path(tmp) / 'timer')
+                self.assertEqual(timer['Timer']['Persistent'], 'true')
+                self.assertEqual(timer['Timer']['Unit'], 'mtp-refresh.service')
+                self.assertTrue((pathlib.Path(tmp) / 'config' / 'manifest').is_file())
+                self.assertEqual((pathlib.Path(tmp) / 'config' / 'account').read_text(), '991 991\n')
+                self.assertIn(f'port={port}&secret=ee', result.stdout)
+                self.assertIn('su root root', (pathlib.Path(tmp) / 'rotate').read_text())
 
     def test_lock_rejects_symlink_without_truncating_target(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -370,13 +375,6 @@ class DeepSafetyTests(unittest.TestCase):
             self.assertEqual((pathlib.Path(tmp) / 'proxy-multi.conf').read_text(),
                              'proxy_for 2 149.154.167.51:8888;\n')
 
-    def test_ipv6_docker_bridge_mapping_is_tcp_conflict(self):
-        result = self.run_function('''ss() { :; }; docker() {
-            if [[ $1 == info ]]; then return 0; fi
-            echo 'web [::]:443->443/tcp'; }; require_free_port 443''')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('web', result.stderr)
-
     def test_install_rollback_refuses_group_shared_after_creation(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = self.run_function(install_mocks(tmp) + '''
@@ -398,6 +396,61 @@ class DeepSafetyTests(unittest.TestCase):
             self.assertIn('服务启动失败', result.stderr)
             for path in ('app', 'config', 'log', 'unit', 'timer', 'refresh', 'rotate', 'work'):
                 self.assertFalse((pathlib.Path(tmp) / path).exists(), result.stdout + result.stderr)
+
+    def test_install_refuses_failed_dropin_query_before_creating_resources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self.run_function(install_mocks(tmp) + '''
+                systemctl() { if [[ ${3:-} == DropInPaths ]]; then return 1;
+                    else mock_systemctl "$@"; fi; };
+                install_proxy --server example.com''')
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('额外配置', result.stderr)
+            for path in ('work', 'app', 'config', 'log', 'unit'):
+                self.assertFalse((pathlib.Path(tmp) / path).exists())
+
+    def test_account_query_errors_are_not_treated_as_missing_accounts(self):
+        for database, status in (('passwd', 1), ('group', 1), ('passwd', 3), ('group', 0)):
+            with self.subTest(database=database, status=status), tempfile.TemporaryDirectory() as tmp:
+                (pathlib.Path(tmp) / 'account').write_text('991 991\n')
+                (pathlib.Path(tmp) / 'account').chmod(0o600)
+                result = self.run_function(f'''CONFIG="{tmp}"; {PORTABLE_TOOLS}
+                    getent() {{
+                        if [[ $1 == {database} && $# == 2 ]]; then return {status}; fi
+                        if [[ $1 == passwd ]]; then echo 'mtp:x:991:991::/nonexistent:/usr/sbin/nologin';
+                        else echo 'mtp:x:991:'; fi;
+                    }}; account_check''')
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_install_refuses_failed_account_query_before_network(self):
+        for database in ('passwd', 'group'):
+            with self.subTest(database=database), tempfile.TemporaryDirectory() as tmp:
+                result = self.run_function(install_mocks(tmp) + f'''
+                    getent() {{ if [[ $1 == {database} ]]; then return 1; else return 2; fi; }};
+                    install_proxy --server example.com''')
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse((pathlib.Path(tmp) / 'work').exists())
+                self.assertFalse((pathlib.Path(tmp) / 'app').exists())
+
+    def test_uninstall_preserves_files_on_late_account_query_failure(self):
+        for database in ('passwd', 'group'):
+            with self.subTest(database=database), tempfile.TemporaryDirectory() as tmp:
+                base = pathlib.Path(tmp)
+                for name in ('app', 'config', 'log'):
+                    (base / name).mkdir()
+                (base / 'config' / 'mtp.conf').write_text(VALID_CONFIG)
+                result = self.run_function(f'''APP="{base}/app"; CONFIG="{base}/config"; LOG="{base}/log";
+                    UNIT="{base}/unit"; TIMER="{base}/timer"; REFRESH="{base}/refresh"; ROTATE="{base}/rotate";
+                    {PORTABLE_TOOLS}
+                    root_only() {{ :; }}; lock() {{ :; }}; owner_check() {{ :; }}; account_check() {{ :; }};
+                    systemctl() {{ if [[ ${{3:-}} == LoadState ]]; then echo not-found; fi; }};
+                    getent() {{ if [[ $1 == {database} ]]; then return 1;
+                        else echo 'mtp:x:991:991::/nonexistent:/usr/sbin/nologin'; fi; }};
+                    port_lines() {{ :; }};
+                    userdel() {{ echo DELETED; }}; groupdel() {{ echo DELETED; }};
+                    uninstall_proxy''', input='YES\n')
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn('DELETED', result.stdout)
+                self.assertTrue((base / 'config' / 'mtp.conf').exists())
 
 
 if __name__ == '__main__':
